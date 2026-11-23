@@ -1,15 +1,17 @@
-/* Token Radar v2 theme. One dark header, white panels, one accent. */
+/* Token Radar v3 theme. One dark header, white panels, one accent.
+   v3 sharpens the contrast: darker muted text, stronger borders and
+   table headers, bold rank numbers, verdict pills. */
 :root {
-  --canvas: #eef2ef;
+  --canvas: #e9efeb;
   --surface: #ffffff;
-  --ink: #14201a;
-  --muted: #5b6d63;
-  --border: #d5ded8;
-  --accent: #0d6b4e;
-  --accent-soft: #e2f2ec;
-  --gold: #8a6d1b;
-  --gold-soft: #fbf3d9;
-  --negative: #a83a2c;
+  --ink: #101c15;
+  --muted: #41534a;
+  --border: #aebdb5;
+  --accent: #0a5c42;
+  --accent-soft: #d9ede4;
+  --gold: #7a5f10;
+  --gold-soft: #f8efc8;
+  --negative: #8f2f22;
   --radius: 12px;
   --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-num: ui-monospace, "SF Mono", Menlo, monospace;
@@ -28,6 +30,18 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: var
 .stats dt { margin: 0; color: #8fd0b6; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
 .stats dd { margin: 0; font-family: var(--font-num); font-size: 18px; font-weight: 700; }
 main.wrap { padding-top: 24px; padding-bottom: 24px; }
+.strip { background: #0e2b20; color: #eaf4ee; border-radius: var(--radius); padding: 14px 20px; margin-bottom: 22px; }
+.strip dl { display: flex; flex-wrap: wrap; gap: 8px 26px; margin: 0; padding: 0; }
+.strip dl div { display: flex; gap: 8px; align-items: baseline; }
+.strip dt { margin: 0; color: #8fd0b6; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.strip dd { margin: 0; font-family: var(--font-num); font-size: 14px; font-weight: 700; }
+.strip-note { margin: 10px 0 0; color: #c4d8cd; font-size: 12px; }
+.board-strip { background: var(--accent-soft); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--ink); margin: 4px 0 10px; }
+.pill { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .02em; border-radius: 20px; padding: 2px 9px; white-space: nowrap; }
+.pill-high { color: #ffffff; background: #0a5c42; }
+.pill-mod { color: #3d2f00; background: #f8efc8; border: 1px solid #c9a94a; }
+.pill-low { color: #33413a; background: #e6ebe8; border: 1px solid #aebdb5; }
+.pill-heavy { color: #ffffff; background: #8f2f22; }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; margin-bottom: 22px; }
 h2 { font-size: 20px; margin: 0 0 10px; }
 h3 { font-size: 14px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
@@ -50,11 +64,13 @@ h3 { font-size: 14px; margin: 0 0 8px; text-transform: uppercase; letter-spacing
 .count { color: var(--muted); font-size: 13px; margin: 4px 0 10px; }
 .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 table.board { border-collapse: collapse; width: 100%; font-size: 14px; }
-.board th, .board td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
-.board thead th { background: #f4f7f5; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); position: sticky; top: 0; }
+.board th, .board td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.board thead th { background: #dfe9e2; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #2c3f35; position: sticky; top: 0; }
 .board tbody tr { cursor: pointer; }
 .board tbody tr:hover { background: var(--accent-soft); }
 .board tbody tr.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.board tbody tr:nth-child(even) { background: #f7faf8; }
+.board tbody tr:nth-child(even):hover { background: var(--accent-soft); }
 .board .num { text-align: right; font-family: var(--font-num); }
 .board td.name { font-weight: 600; white-space: normal; min-width: 150px; }
 .badge { display: inline-block; font-size: 11px; font-weight: 700; color: var(--gold); background: var(--gold-soft); border-radius: 20px; padding: 1px 8px; margin-left: 6px; vertical-align: 1px; }

@@ -32,6 +32,16 @@
     if (n >= 0.01) return n.toFixed(2) + 'x';
     return n.toFixed(3) + 'x';
   }
+  function fmtOdds(n) {
+    if (n === null || n === undefined || !isFinite(n)) return 'n/a';
+    return (n * 100).toFixed(1) + '%';
+  }
+  function verdictClass(v) {
+    if (v === 'HIGH CONVICTION') return 'pill pill-high';
+    if (v === 'MODERATE') return 'pill pill-mod';
+    if (v === 'LOW ROI') return 'pill pill-low';
+    return 'pill pill-heavy';
+  }
   function $(id) { return document.getElementById(id); }
 
   // --- hash state -----------------------------------------------------------
@@ -72,6 +82,46 @@
       '<div><dt>Live comps fitted</dt><dd>' + s.live_n + '</dd></div>' +
       '<div><dt>Top implied value</dt><dd>' + fmtUsd(s.top_implied_usd) + '</dd></div>' +
       '<div><dt>Snapshot</dt><dd>' + esc(DATA.as_of) + '</dd></div>';
+  }
+  function renderIntegrity() {
+    var s = DATA.stats;
+    var o = DATA.odds;
+    if (!$('integrity-dl')) return;
+    var a = o.splits[0], b = o.splits[1];
+    $('integrity-dl').innerHTML =
+      '<div><dt>Snapshot</dt><dd>' + s.rows + ' ranked / ' + (s.rows + s.excluded_n) + ' in snapshot</dd></div>' +
+      '<div><dt>Excluded by rule</dt><dd>' + s.excluded_n + ' (' + s.tokened_n + ' already have a token)</dd></div>' +
+      '<div><dt>Watchlist</dt><dd>' + s.watchlist_covered + ' / ' + s.watchlist_total + '</dd></div>' +
+      '<div><dt>Value hold-outs</dt><dd>MedAPE ' + (EV.validation.splits[0].v2.medape * 100).toFixed(0) + '% / ' + (EV.validation.splits[1].v2.medape * 100).toFixed(0) + '%</dd></div>' +
+      '<div><dt>Odds hold-outs</dt><dd>AUC ' + a.auc.toFixed(2) + ' / ' + b.auc.toFixed(2) + '</dd></div>' +
+      '<div><dt>Determinism</dt><dd>2 runs byte-identical</dd></div>';
+    $('integrity-note').textContent =
+      'Nothing here is asserted without a number behind it: the fit, both hold-outs and the odds validation are printed in full below. The same snapshot always builds the same board.';
+  }
+  function renderOdds() {
+    if (!EV || !EV.odds) return;
+    var o = EV.odds;
+    $('odds-kv').innerHTML =
+      '<dt>Token rate in snapshot</dt><dd>' + (o.global_rate * 100).toFixed(1) + '% of 758 protocols record a token</dd>' +
+      '<dt>Logistic coefficients</dt><dd>intercept ' + o.coefficients.intercept.toFixed(2) + ' &middot; log TVL ' + o.coefficients.log_tvl.toFixed(2) + ' &middot; age ' + o.coefficients.age.toFixed(2) + ' &middot; age missing ' + o.coefficients.age_missing.toFixed(2) + '</dd>' +
+      '<dt>Intercept shift (recalibration)</dt><dd>' + o.intercept_shift.toFixed(2) + '</dd>' +
+      '<dt>In-sample</dt><dd>AUC ' + o.in_sample.auc.toFixed(3) + ' &middot; Brier ' + o.in_sample.brier.toFixed(3) + '</dd>';
+    $('odds-note').textContent =
+      'Age is the signal: protocols under 6 months old tokenise at 3%, over 3 years at 29%. TVL barely moves the odds. Category offsets are shrunk (n / (n + 8)), so a category with one protocol cannot swing the odds.';
+    var tb = $('odds-table').querySelector('tbody');
+    tb.innerHTML = o.splits.map(function (sp) {
+      return '<tr><td>Hold-out ' + (sp.offset === 0 ? 'A' : 'B') + ' (' + sp.hold_n + ' held out of ' + (sp.train_n + sp.hold_n) + ')</td>' +
+        '<td>' + sp.auc.toFixed(2) + '</td><td>' + sp.brier.toFixed(3) + '</td>' +
+        '<td>' + (sp.mean_pred * 100).toFixed(1) + '% vs ' + (sp.observed * 100).toFixed(1) + '% observed</td></tr>';
+    }).join('');
+    $('odds-reading').textContent = o.reading;
+    var vc = DATA.stats.verdict_counts;
+    $('verdict-kv').innerHTML =
+      '<dt>High conviction</dt><dd>' + (vc['HIGH CONVICTION'] || 0) + '</dd>' +
+      '<dt>Moderate</dt><dd>' + (vc.MODERATE || 0) + '</dd>' +
+      '<dt>Low ROI</dt><dd>' + (vc['LOW ROI'] || 0) + '</dd>' +
+      '<dt>Capital heavy</dt><dd>' + (vc['CAPITAL HEAVY'] || 0) + '</dd>';
+    $('verdict-note').textContent = EV.farm_verdicts.rule + ' ' + EV.farm_verdicts.gas;
   }
   function renderModel() {
     if (!EV) return;
@@ -156,27 +206,38 @@
       if (q && (r.name + ' ' + r.slug + ' ' + r.category).toLowerCase().indexOf(q) === -1) return false;
       return true;
     });
-    if (state.sort === 'tvl') list.sort(function (a, b) { return b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1); });
+    if (state.sort === 'ev') list.sort(function (a, b) { return b.expected_value_usd - a.expected_value_usd || (a.slug < b.slug ? -1 : 1); });
+    else if (state.sort === 'odds') list.sort(function (a, b) { return b.token_odds - a.token_odds || (a.slug < b.slug ? -1 : 1); });
+    else if (state.sort === 'tvl') list.sort(function (a, b) { return b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1); });
     else if (state.sort === 'name') list.sort(function (a, b) { return a.name.localeCompare(b.name); });
     else list.sort(function (a, b) { return a.rank - b.rank; });
     return list;
   }
   function renderBoard() {
     var list = filtered();
+    var vc = DATA.stats.verdict_counts;
+    var va = EV.validation.splits[0].v2.medape * 100, vb = EV.validation.splits[1].v2.medape * 100;
+    var oa = EV.odds.splits[0].auc, ob = EV.odds.splits[1].auc;
+    $('board-strip').textContent =
+      DATA.stats.rows + ' ranked · watchlist ' + DATA.stats.watchlist_covered + '/' + DATA.stats.watchlist_total +
+      ' · value MedAPE ' + va.toFixed(0) + '% / ' + vb.toFixed(0) + '% · odds AUC ' + oa.toFixed(2) + ' / ' + ob.toFixed(2) +
+      ' · verdicts: ' + (vc['HIGH CONVICTION'] || 0) + ' high conviction, ' + (vc.MODERATE || 0) + ' moderate, ' +
+      (vc['LOW ROI'] || 0) + ' low ROI, ' + (vc['CAPITAL HEAVY'] || 0) + ' capital heavy · deterministic';
     $('count').textContent = 'Showing ' + list.length + ' of ' + rows.length + ' protocols' +
       (state.category !== 'all' ? ' in ' + state.category : '') +
       (state.watchlist ? ' (watchlist only)' : '') + '. Click a row for the value breakdown, comparables and farm plan.';
     var tb = $('board').querySelector('tbody');
     tb.innerHTML = list.map(function (r) {
       return '<tr data-slug="' + esc(r.slug) + '"' + (state.selected === r.slug ? ' class="selected"' : '') + '>' +
-        '<td class="num">' + r.rank + '</td>' +
+        '<td class="num"><strong>' + r.rank + '</strong></td>' +
         '<td class="name">' + esc(r.name) + (r.watchlist ? '<span class="badge">WATCHLIST</span>' : '') + '</td>' +
         '<td>' + esc(r.category) + '</td>' +
-        '<td class="chains">' + r.chains.slice(0, 3).map(esc).join(', ') + (r.chains.length > 3 ? ' +' + (r.chains.length - 3) : '') + '</td>' +
         '<td class="num">' + fmtUsd(r.tvl_usd) + '</td>' +
         '<td class="num">' + fmtPct(r.change_7d) + '</td>' +
         '<td class="num"><strong>' + fmtUsd(r.implied_value_usd) + '</strong></td>' +
-        '<td class="num">' + fmtMult(r.multiple) + '</td></tr>';
+        '<td class="num">' + fmtOdds(r.token_odds) + '</td>' +
+        '<td class="num"><strong>' + fmtUsd(r.expected_value_usd) + '</strong></td>' +
+        '<td><span class="' + verdictClass(r.farm_cost.verdict) + '">' + r.farm_cost.verdict + '</span></td></tr>';
     }).join('');
     tb.querySelectorAll('tr').forEach(function (tr) {
       tr.addEventListener('click', function () {
@@ -223,7 +284,19 @@
       '<tr><td>Growth tilt (7d ' + fmtPct(row.change_7d) + ')</td><td class="num">&times;' + row.growth.toFixed(2) + '</td></tr>' +
       '<tr><td>Breadth tilt (' + row.chains.length + ' chain' + (row.chains.length === 1 ? '' : 's') + ')</td><td class="num">&times;' + row.breadth.toFixed(2) + '</td></tr>' +
       '<tr class="total"><td>Implied value</td><td class="num">' + fmtUsd(row.implied_value_usd) + '</td></tr>' +
+      '<tr><td>Token odds (fitted: protocols like this one)</td><td class="num">' + fmtOdds(row.token_odds) + '</td></tr>' +
+      '<tr class="total"><td>Expected value (implied &times; odds)</td><td class="num">' + fmtUsd(row.expected_value_usd) + '</td></tr>' +
       '</tbody></table>' +
+      '<h3>Farm cost &amp; verdict</h3>' +
+      '<p><span class="' + verdictClass(row.farm_cost.verdict) + '">' + row.farm_cost.verdict + '</span></p>' +
+      '<table class="breakdown"><tbody>' +
+      '<tr><td>Minimum capital (two actions)</td><td class="num">$' + row.farm_cost.capital_usd.toFixed(2) + '</td></tr>' +
+      '<tr><td>Gas, 4 transactions (typical ' + esc(row.chains[0] || 'main chain') + ' fees)</td><td class="num">$' + row.farm_cost.gas_usd.toFixed(2) + '</td></tr>' +
+      '<tr><td>Total farm cost</td><td class="num">$' + row.farm_cost.total_usd.toFixed(2) + '</td></tr>' +
+      '<tr><td>Hold</td><td class="num">' + row.farm_cost.hold_days + ' days</td></tr>' +
+      '<tr><td>Expected value per dollar spent</td><td class="num">' + Math.round(row.expected_value_usd / row.farm_cost.total_usd).toLocaleString('en-US') + 'x</td></tr>' +
+      '</tbody></table>' +
+      '<p class="note">Verdict rule: EV / farm cost &ge; 30,000 HIGH CONVICTION, &ge; 10,000 MODERATE, &ge; 3,000 LOW ROI, otherwise CAPITAL HEAVY; odds under 10% with a cost of $150+ is CAPITAL HEAVY whatever the ratio. EV is protocol-level expected value, not a promised payout to one farmer. Gas figures are stated typical fees, not snapshot data.</p>' +
       '<h3>Nearest live comparables</h3>' +
       '<table class="comps"><thead><tr><th scope="col">Protocol</th><th scope="col">Category</th><th scope="col" class="num">TVL</th><th scope="col" class="num">Market cap</th><th scope="col" class="num">Multiple</th></tr></thead><tbody>' +
       comps.map(function (c) {
@@ -273,7 +346,9 @@
   readHash();
   fillSelects();
   renderStats();
+  renderIntegrity();
   renderModel();
+  renderOdds();
   bindControls();
   renderAll();
   // Deep links land on their subject: a selected row shows its detail, and

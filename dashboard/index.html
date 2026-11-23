@@ -12,11 +12,15 @@
   <div class="wrap">
     <p class="kicker">ARGUS — the radar that prices launches before they launch</p>
     <h1>Which protocol without a token is worth the most?</h1>
-    <p class="lede">Every protocol below has no token yet. Each one is priced from the live market: a curve fitted on the 128 protocols whose token already trades, plus a shrunk category effect and three small, stated tilts. The board is sorted by that implied value, highest first.</p>
+    <p class="lede">Every protocol below has no token yet. Each one is priced from the live market: a curve fitted on the 128 protocols whose token already trades, plus a shrunk category effect and three small, stated tilts. The board is sorted by that implied value, highest first. Two more fitted numbers sit beside it: <strong>token odds</strong> — how often protocols that look like this one already record a token — and <strong>expected value</strong>, the implied value times those odds. The biggest implied value is not always the best bet.</p>
     <dl class="stats" id="stats"></dl>
   </div>
 </header>
 <main class="wrap">
+  <section class="strip" id="integrity" aria-label="Integrity strip">
+    <dl id="integrity-dl"></dl>
+    <p class="strip-note" id="integrity-note"></p>
+  </section>
   <section class="panel" id="model-panel" aria-labelledby="model-h">
     <h2 id="model-h">The value model, fitted and tested</h2>
     <p class="formula" id="formula"></p>
@@ -37,6 +41,28 @@
     </div>
     <p class="note" id="rule-note"></p>
   </section>
+  <section class="panel" id="odds-panel" aria-labelledby="odds-h">
+    <h2 id="odds-h">Token odds &amp; expected value, fitted not guessed</h2>
+    <p class="note">The odds come from a logistic regression on all 758 protocols in the snapshot: does it record a token yet, given its TVL, its age and its category? A protocol's odds are the share of protocols that look like it and already record a token — a propensity, not a promise. Expected value is the implied value times those odds.</p>
+    <div class="model-grid">
+      <div>
+        <h3>The odds fit</h3>
+        <dl class="kv" id="odds-kv"></dl>
+        <p class="note" id="odds-note"></p>
+      </div>
+      <div>
+        <h3>Held out twice</h3>
+        <table class="valid" id="odds-table">
+          <thead><tr><th scope="col">Hold-out</th><th scope="col">AUC</th><th scope="col">Brier</th><th scope="col">Mean predicted vs observed</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="note" id="odds-reading"></p>
+      </div>
+    </div>
+    <h3>Farm verdicts across the board</h3>
+    <dl class="kv" id="verdict-kv"></dl>
+    <p class="note" id="verdict-note"></p>
+  </section>
   <section class="panel" aria-labelledby="scatter-h">
     <h2 id="scatter-h">The comps curve: live market caps against TVL</h2>
     <p class="note">Each dot is one of the 128 protocols whose token already trades. The line is the fitted curve. The ringed dot, when one is selected below, is that protocol's implied value.</p>
@@ -51,10 +77,13 @@
       <label class="check"><input type="checkbox" id="watchlist-only"> Watchlist only</label>
       <label>Sort <select id="sort">
         <option value="implied">Implied value</option>
+        <option value="ev">Expected value</option>
+        <option value="odds">Token odds</option>
         <option value="tvl">TVL</option>
         <option value="name">Name</option>
       </select></label>
     </form>
+    <p class="board-strip" id="board-strip"></p>
     <p class="count" id="count"></p>
     <div class="table-wrap">
       <table class="board" id="board">
@@ -62,11 +91,12 @@
           <th scope="col" class="num">#</th>
           <th scope="col">Protocol</th>
           <th scope="col">Category</th>
-          <th scope="col">Chains</th>
           <th scope="col" class="num">TVL</th>
           <th scope="col" class="num">7d</th>
           <th scope="col" class="num">Implied</th>
-          <th scope="col" class="num">Multiple</th>
+          <th scope="col" class="num">Token odds</th>
+          <th scope="col" class="num">Expected value</th>
+          <th scope="col">Verdict</th>
         </tr></thead>
         <tbody></tbody>
       </table>
