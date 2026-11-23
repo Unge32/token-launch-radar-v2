@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar: pre-token protocols ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#board">Skip to the board</a>
+<header class="top">
+  <div class="wrap">
+    <p class="kicker">ARGUS — the radar that prices launches before they launch</p>
+    <h1>Which protocol without a token is worth the most?</h1>
+    <p class="lede">Every protocol below has no token yet. Each one is priced from the live market: a curve fitted on the 128 protocols whose token already trades, plus a shrunk category effect and three small, stated tilts. The board is sorted by that implied value, highest first.</p>
+    <dl class="stats" id="stats"></dl>
+  </div>
+</header>
+<main class="wrap">
+  <section class="panel" id="model-panel" aria-labelledby="model-h">
+    <h2 id="model-h">The value model, fitted and tested</h2>
+    <p class="formula" id="formula"></p>
+    <div class="model-grid">
+      <div>
+        <h3>The fit</h3>
+        <dl class="kv" id="fit-kv"></dl>
+        <p class="note" id="fit-note"></p>
+      </div>
+      <div>
+        <h3>Held out twice</h3>
+        <table class="valid" id="valid-table">
+          <thead><tr><th scope="col">Hold-out</th><th scope="col">Fitted model</th><th scope="col">Old median model</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="note" id="valid-note"></p>
+      </div>
+    </div>
+    <p class="note" id="rule-note"></p>
+  </section>
+  <section class="panel" aria-labelledby="scatter-h">
+    <h2 id="scatter-h">The comps curve: live market caps against TVL</h2>
+    <p class="note">Each dot is one of the 128 protocols whose token already trades. The line is the fitted curve. The ringed dot, when one is selected below, is that protocol's implied value.</p>
+    <div id="scatter" role="img" aria-label="Scatter of live market caps against TVL with the fitted curve"></div>
+  </section>
+  <section aria-labelledby="board-h">
+    <h2 id="board-h">The board</h2>
+    <form class="controls" id="controls">
+      <label>Search <input type="search" id="q" placeholder="Name, slug or category" autocomplete="off"></label>
+      <label>Category <select id="category"><option value="all">All categories</option></select></label>
+      <label>Chain <select id="chain"><option value="all">All chains</option></select></label>
+      <label class="check"><input type="checkbox" id="watchlist-only"> Watchlist only</label>
+      <label>Sort <select id="sort">
+        <option value="implied">Implied value</option>
+        <option value="tvl">TVL</option>
+        <option value="name">Name</option>
+      </select></label>
+    </form>
+    <p class="count" id="count"></p>
+    <div class="table-wrap">
+      <table class="board" id="board">
+        <thead><tr>
+          <th scope="col" class="num">#</th>
+          <th scope="col">Protocol</th>
+          <th scope="col">Category</th>
+          <th scope="col">Chains</th>
+          <th scope="col" class="num">TVL</th>
+          <th scope="col" class="num">7d</th>
+          <th scope="col" class="num">Implied</th>
+          <th scope="col" class="num">Multiple</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel detail" id="detail" aria-labelledby="detail-h" hidden>
+    <h2 id="detail-h">Protocol detail</h2>
+    <div id="detail-body"></div>
+  </section>
+</main>
+<footer class="wrap">
+  <p id="foot"></p>
+</footer>
+<script src="../data.js"></script>
+<script src="evidence.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
