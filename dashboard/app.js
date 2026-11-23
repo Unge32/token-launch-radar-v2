@@ -135,10 +135,10 @@
     }
     var sel = state.selected ? rows.filter(function (r) { return r.slug === state.selected; })[0] : null;
     if (sel) {
-      var sx = Math.log10(sel.tvl_usd), sy = Math.log10(sel.implied_usd);
+      var sx = Math.log10(sel.tvl_usd), sy = Math.log10(sel.implied_value_usd);
       if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) {
         out.push('<circle cx="' + X(sx).toFixed(1) + '" cy="' + Y(sy).toFixed(1) + '" r="8" fill="none" stroke="#0d6b4e" stroke-width="2"/>');
-        out.push('<circle cx="' + X(sx).toFixed(1) + '" cy="' + Y(sy).toFixed(1) + '" r="4" fill="#0d6b4e"><title>' + esc(sel.name) + ' — implied ' + fmtUsd(sel.implied_usd) + '</title></circle>');
+        out.push('<circle cx="' + X(sx).toFixed(1) + '" cy="' + Y(sy).toFixed(1) + '" r="4" fill="#0d6b4e"><title>' + esc(sel.name) + ' — implied ' + fmtUsd(sel.implied_value_usd) + '</title></circle>');
         out.push('<text x="' + (X(sx) + 12).toFixed(1) + '" y="' + (Y(sy) - 8).toFixed(1) + '" font-size="12" font-weight="700" fill="#0d6b4e">' + esc(sel.name) + '</text>');
       }
     }
@@ -175,7 +175,7 @@
         '<td class="chains">' + r.chains.slice(0, 3).map(esc).join(', ') + (r.chains.length > 3 ? ' +' + (r.chains.length - 3) : '') + '</td>' +
         '<td class="num">' + fmtUsd(r.tvl_usd) + '</td>' +
         '<td class="num">' + fmtPct(r.change_7d) + '</td>' +
-        '<td class="num"><strong>' + fmtUsd(r.implied_usd) + '</strong></td>' +
+        '<td class="num"><strong>' + fmtUsd(r.implied_value_usd) + '</strong></td>' +
         '<td class="num">' + fmtMult(r.multiple) + '</td></tr>';
     }).join('');
     tb.querySelectorAll('tr').forEach(function (tr) {
@@ -214,7 +214,7 @@
     $('detail-body').innerHTML =
       '<p class="sub">Rank #' + row.rank + ' of ' + rows.length + ' &middot; ' + esc(row.category) + ' &middot; ' + row.chains.map(esc).join(', ') + ' &middot; ' + age + (row.watchlist ? ' &middot; on the watchlist' : '') + '</p>' +
       '<h3 style="text-transform:none;letter-spacing:0;font-size:22px;color:var(--ink)">' + esc(row.name) + '</h3>' +
-      '<p class="big">' + fmtUsd(row.implied_usd) + '</p>' +
+      '<p class="big">' + fmtUsd(row.implied_value_usd) + '</p>' +
       '<h3>How the value is built</h3>' +
       '<table class="breakdown"><tbody>' +
       '<tr><td>TVL</td><td class="num">' + fmtUsd(row.tvl_usd) + '</td></tr>' +
@@ -222,7 +222,7 @@
       '<tr><td>Maturity tilt (' + age + ')</td><td class="num">&times;' + row.maturity.toFixed(2) + '</td></tr>' +
       '<tr><td>Growth tilt (7d ' + fmtPct(row.change_7d) + ')</td><td class="num">&times;' + row.growth.toFixed(2) + '</td></tr>' +
       '<tr><td>Breadth tilt (' + row.chains.length + ' chain' + (row.chains.length === 1 ? '' : 's') + ')</td><td class="num">&times;' + row.breadth.toFixed(2) + '</td></tr>' +
-      '<tr class="total"><td>Implied value</td><td class="num">' + fmtUsd(row.implied_usd) + '</td></tr>' +
+      '<tr class="total"><td>Implied value</td><td class="num">' + fmtUsd(row.implied_value_usd) + '</td></tr>' +
       '</tbody></table>' +
       '<h3>Nearest live comparables</h3>' +
       '<table class="comps"><thead><tr><th scope="col">Protocol</th><th scope="col">Category</th><th scope="col" class="num">TVL</th><th scope="col" class="num">Market cap</th><th scope="col" class="num">Multiple</th></tr></thead><tbody>' +
