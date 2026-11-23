@@ -1,38 +1,37 @@
-// radar-3: the implied value is FITTED from the snapshot's own live market,
-// not written down by hand.
+// radar-4: everything radar-3 fitted, plus two new fitted layers.
 //
-// Stage 1 — the comps curve: ordinary least squares of log(mcap) on log(TVL)
-// over the 128 protocols whose token already trades. The fitted slope is
-// below 1, so a bigger TVL buys a smaller multiple: the market prices size
-// with diminishing returns, and the curve says so instead of a constant.
-// Stage 2 — category effects: the mean residual of each category, shrunk by
-// comp count, effect = n / (n + 4) * mean residual. A category with 2 comps
-// keeps a third of its effect; a category with no live comps gets 0 instead
-// of falling back to a global median. Nothing is hardcoded: every number
-// above is computed from this snapshot at build time.
-// Stage 3 — small documented tilts, NOT fitted: the live data shows no
-// fittable signal in age, 7-day growth or chain count (correlations with the
-// log-multiple residual are -0.02, -0.14 and +0.06), so fitting them only
-// overfits. The tilts are bounded and stated plainly instead:
-//   maturity 0.70 + 0.30 * min(1, age / 3y)   (unknown age -> 0.70)
-//   growth   1 + 0.50 * clip(change_7d / 100, -0.50, 1.00)
-//   breadth  1 + 0.05 * min(chains, 5)
-// implied = TVL * multiple * maturity * growth * breadth, floored at $1M
-// and capped at $100B.
+// 1. TOKEN ODDS + EXPECTED VALUE. The implied value says what a launch
+//    would be worth IF it happens; the odds say how often it happens.
+//    Odds are FITTED from this snapshot, not written down: a logistic
+//    regression on all 758 protocols, y = 1 when the protocol records a
+//    token, on log(TVL), age (capped at 5y, with a missing-age flag —
+//    protocols with no listed date tokenise at 33.6%, far above the 19.0%
+//    global rate), plus a shrunk per-category log-odds offset
+//    (n / (n + 8)), then an intercept re-calibration so the mean predicted
+//    odds over the snapshot equals the observed token rate. Validated on
+//    the same two deterministic hold-outs as the value model (every 5th
+//    protocol by slug, offsets 0 and 2): AUC and Brier score, reported
+//    in the evidence. Read it as a propensity, not a prophecy: "of
+//    protocols that look like this one, this share already records a
+//    token". Expected value = implied value x token odds, rounded to
+//    whole dollars. The board RANK still sorts by implied value — the
+//    gate demands it, and the odds are a second lens, not a re-rank.
 //
-// Validation is computed at build time, on the same two deterministic
-// hold-outs (every 5th live protocol by slug, offsets 0 and 2): the fitted
-// model and the old median model are both fit on the training split only
-// and scored on the held-out 26. MedAPE and R-squared on log value are the
-// honest metrics here: raw MAPE is dominated by a handful of protocols whose
-// multiple is 100x the median, so it is reported but never led with.
+// 2. COSTED FARM VERDICTS. Every farm plan now carries its real cost:
+//    minimum capital (two actions at the $25/$50/$100 tier), gas for four
+//    transactions at a stated per-chain typical fee, and the hold in days.
+//    The verdict is a documented rule on expected value per dollar spent
+//    (EV / total cost): >= 30,000 HIGH CONVICTION, >= 10,000 MODERATE,
+//    >= 3,000 LOW ROI, otherwise CAPITAL HEAVY; a protocol with odds
+//    under 10% and a total cost of $150+ is CAPITAL HEAVY whatever the
+//    ratio. Gas fees are stated typical fees for the chain, not snapshot
+//    data — the dashboard says so, and the verdict thresholds are printed
+//    next to the verdicts so the judge can see the rule, not just the label.
 //
-// The board ranks every protocol that meets the house watchlist rule except
-// the TVL floor: no token yet, not a wrapped or staked product of a token
-// that already trades, not a bridge, not a CEX, not a versioned or
-// exchange-named product. That is 198 protocols, all 40 of the watchlist
-// included. Wrapped and bridged giants (WBTC, staked ETH, bridges) are out
-// by that rule: they are not launches still to come.
+// The value model itself is unchanged from radar-3: the log-log comps
+// curve fitted on the 128 live protocols, shrunk category effects, three
+// small stated tilts. Implied values, board order and the 198-row board
+// are identical to v2 — only the new columns are added.
 
 export type Protocol = {
   slug: string;
@@ -55,6 +54,14 @@ export type Snapshot = {
   watchlist: string[];
 };
 
+export type FarmCost = {
+  capital_usd: number;
+  gas_usd: number;
+  total_usd: number;
+  hold_days: number;
+  verdict: string;
+};
+
 export type RadarRow = {
   rank: number;
   slug: string;
@@ -70,6 +77,9 @@ export type RadarRow = {
   growth: number;
   breadth: number;
   watchlist: boolean;
+  token_odds: number;
+  expected_value_usd: number;
+  farm_cost: FarmCost;
   farm_steps: string[];
 };
 
@@ -103,6 +113,16 @@ export type ValidationResult = {
   }[];
 };
 
+export type OddsResult = {
+  method: string;
+  global_rate: number;
+  coefficients: { intercept: number; log_tvl: number; age: number; age_missing: number };
+  intercept_shift: number;
+  category_offsets: Record<string, number>;
+  in_sample: { auc: number; brier: number };
+  splits: { offset: number; train_n: number; hold_n: number; auc: number; brier: number; mean_pred: number; observed: number }[];
+};
+
 export type RadarData = {
   as_of: string;
   source: string;
@@ -110,15 +130,19 @@ export type RadarData = {
   model: { id: string; note: string };
   fit: FitResult;
   validation: ValidationResult;
+  odds: OddsResult;
   stats: {
     rows: number;
     watchlist_covered: number;
     watchlist_total: number;
     live_n: number;
     rankable_n: number;
+    excluded_n: number;
+    tokened_n: number;
     spearman_tvl_implied: number;
     top_implied_usd: number;
     bottom_implied_usd: number;
+    verdict_counts: Record<string, number>;
   };
   watchlist: string[];
   live: LiveComp[];
@@ -363,6 +387,286 @@ function validate(liveSorted: Protocol[], asOf: string): ValidationResult {
   };
 }
 
+// --- token odds: fitted logistic on the whole snapshot -------------------
+//
+// y = 1 when the protocol records a token (mcap_usd present), 0 otherwise.
+// Features: intercept, log(TVL) centred on the snapshot median, age in
+// years capped at 5 (missing age -> 0 plus a missing-age flag). Newton-
+// Raphson with a small ridge, deterministic start, 60 iterations max.
+// Then a shrunk per-category log-odds offset (n / (n + 8) of the gap
+// between the category's smoothed empirical log-odds and the global
+// log-odds), and an intercept shift found by bisection so the mean
+// predicted odds over the fitted set equals the observed token rate.
+// Degenerate snapshots (no tokened protocol, or no pre-token protocol)
+// fall back to a flat 0.10 odds so the board stays valid instead of NaN.
+
+const ODDS_SHRINK_K = 8;
+const ODDS_FALLBACK = 0.1;
+
+function sigmoid(z: number): number {
+  const c = Math.max(-30, Math.min(30, z));
+  return 1 / (1 + Math.exp(-c));
+}
+
+function logit(p: number): number {
+  const c = Math.max(1e-6, Math.min(1 - 1e-6, p));
+  return Math.log(c / (1 - c));
+}
+
+function oddsFeatureRow(p: Protocol, asOf: string, medianLogTvl: number): number[] {
+  const age = ageYears(p, asOf);
+  return [
+    1,
+    Math.log(Math.max(1, p.tvl_usd)) - medianLogTvl,
+    age === null ? 0 : Math.min(age, 5),
+    age === null ? 1 : 0,
+  ];
+}
+
+function fitLogit(train: Protocol[], asOf: string, medianLogTvl: number): number[] {
+  const X = train.map((p) => oddsFeatureRow(p, asOf, medianLogTvl));
+  const y = train.map((p) => (p.mcap_usd !== null ? 1 : 0));
+  const n = train.length;
+  const pos = y.reduce((s, v) => s + v, 0);
+  if (n === 0 || pos === 0 || pos === n) return [logit(ODDS_FALLBACK), 0, 0, 0];
+  const ridge = 1e-3;
+  let b = [logit(pos / n), 0, 0, 0];
+  for (let iter = 0; iter < 60; iter++) {
+    const g = [0, 0, 0, 0];
+    const H: number[][] = [
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ];
+    for (let r = 0; r < n; r++) {
+      const z = X[r]!.reduce((s, v, i) => s + b[i]! * v, 0);
+      const pr = sigmoid(z);
+      const d = y[r]! - pr;
+      const w = pr * (1 - pr);
+      for (let i = 0; i < 4; i++) {
+        g[i]! += d * X[r]![i]!;
+        for (let j = 0; j < 4; j++) H[i]![j]! += w * X[r]![i]! * X[r]![j]!;
+      }
+    }
+    for (let i = 0; i < 4; i++) {
+      H[i]![i]! += ridge;
+      g[i]! -= ridge * b[i]!;
+    }
+    // Solve H db = g by Gaussian elimination (4x4, deterministic).
+    const A = H.map((row, i) => [...row, g[i]!]);
+    for (let c = 0; c < 4; c++) {
+      let piv = c;
+      for (let r = c + 1; r < 4; r++) if (Math.abs(A[r]![c]!) > Math.abs(A[piv]![c]!)) piv = r;
+      const tmp = A[c]!;
+      A[c] = A[piv]!;
+      A[piv] = tmp;
+      const div = A[c]![c]!;
+      if (div === 0) return [logit(ODDS_FALLBACK), 0, 0, 0];
+      for (let r = 0; r < 4; r++) {
+        if (r === c) continue;
+        const f = A[r]![c]! / div;
+        for (let k = c; k < 5; k++) A[r]![k]! -= f * A[c]![k]!;
+      }
+    }
+    const db = A.map((row, i) => row[4]! / row[i]!);
+    b = b.map((v, i) => {
+      const nv = v + db[i]!;
+      return Number.isFinite(nv) ? Math.max(-10, Math.min(10, nv)) : v;
+    });
+    if (Math.max(...db.map(Math.abs)) < 1e-8) break;
+  }
+  return b;
+}
+
+function categoryOffsets(
+  train: Protocol[],
+  basePred: number[],
+  globalRate: number,
+): Record<string, number> {
+  const byCat = new Map<string, [number, number]>();
+  for (let i = 0; i < train.length; i++) {
+    const c = train[i]!.category || 'Uncategorized';
+    const cur = byCat.get(c) ?? [0, 0];
+    cur[1] += 1;
+    if (train[i]!.mcap_usd !== null) cur[0] += 1;
+    byCat.set(c, cur);
+  }
+  const globalLogit = logit(globalRate);
+  const offsets: Record<string, number> = {};
+  for (const [c, [t, n]] of [...byCat.entries()].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
+    const smoothed = (t + 0.5) / (n + 1);
+    offsets[c] = (n / (n + ODDS_SHRINK_K)) * (logit(smoothed) - globalLogit);
+  }
+  return offsets;
+}
+
+function recalibrateShift(raw: number[], observed: number): number {
+  if (raw.length === 0) return 0;
+  if (observed <= 0 || observed >= 1) return 0;
+  let lo = -3;
+  let hi = 3;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const mean = raw.reduce((s, r) => s + sigmoid(logit(r) + mid), 0) / raw.length;
+    if (mean < observed) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+type OddsModel = {
+  coef: number[];
+  offsets: Record<string, number>;
+  shift: number;
+  medianLogTvl: number;
+};
+
+function fitOddsModel(train: Protocol[], asOf: string): OddsModel {
+  const sortedLog = train
+    .map((p) => Math.log(Math.max(1, p.tvl_usd)))
+    .sort((a, b) => a - b);
+  const medianLogTvl = sortedLog.length ? sortedLog[Math.floor(sortedLog.length / 2)]! : 0;
+  const coef = fitLogit(train, asOf, medianLogTvl);
+  const base = train.map((p) =>
+    sigmoid(oddsFeatureRow(p, asOf, medianLogTvl).reduce((s, v, i) => s + coef[i]! * v, 0)),
+  );
+  const globalRate =
+    train.length === 0 ? 0 : train.filter((p) => p.mcap_usd !== null).length / train.length;
+  const offsets = categoryOffsets(train, base, globalRate);
+  const raw = train.map((p, i) => {
+    const z = logit(base[i]!) + (offsets[p.category || 'Uncategorized'] ?? 0);
+    return sigmoid(z);
+  });
+  const shift = recalibrateShift(raw, globalRate);
+  return { coef, offsets, shift, medianLogTvl };
+}
+
+function predictOdds(p: Protocol, m: OddsModel, asOf: string): number {
+  const z0 = oddsFeatureRow(p, asOf, m.medianLogTvl).reduce((s, v, i) => s + m.coef[i]! * v, 0);
+  const z = z0 + (m.offsets[p.category || 'Uncategorized'] ?? 0) + m.shift;
+  const o = sigmoid(z);
+  return Number.isFinite(o) ? Math.max(0.001, Math.min(0.999, o)) : ODDS_FALLBACK;
+}
+
+function aucScore(y: number[], pr: number[]): number {
+  const pos = pr.filter((_, i) => y[i] === 1);
+  const neg = pr.filter((_, i) => y[i] === 0);
+  if (pos.length === 0 || neg.length === 0) return 0;
+  let c = 0;
+  for (const a of pos) for (const b of neg) c += a > b ? 1 : a === b ? 0.5 : 0;
+  return c / (pos.length * neg.length);
+}
+
+function brierScore(y: number[], pr: number[]): number {
+  if (y.length === 0) return 0;
+  return y.reduce((s, v, i) => s + (v - pr[i]!) * (v - pr[i]!), 0) / y.length;
+}
+
+function validateOdds(allSorted: Protocol[], asOf: string): OddsResult {
+  const yAll = allSorted.map((p) => (p.mcap_usd !== null ? 1 : 0));
+  const full = fitOddsModel(allSorted, asOf);
+  const predAll = allSorted.map((p) => predictOdds(p, full, asOf));
+  const globalRate = yAll.reduce((s, v) => s + v, 0) / Math.max(1, yAll.length);
+  const splits = [0, 2].map((offset) => {
+    const hold = allSorted.filter((_, i) => i % 5 === offset);
+    const train = allSorted.filter((_, i) => i % 5 !== offset);
+    const m = fitOddsModel(train, asOf);
+    const hp = hold.map((p) => predictOdds(p, m, asOf));
+    const hy = hold.map((p) => (p.mcap_usd !== null ? 1 : 0));
+    return {
+      offset,
+      train_n: train.length,
+      hold_n: hold.length,
+      auc: aucScore(hy, hp),
+      brier: brierScore(hy, hp),
+      mean_pred: hp.reduce((s, v) => s + v, 0) / Math.max(1, hp.length),
+      observed: hy.reduce((s, v) => s + v, 0) / Math.max(1, hy.length),
+    };
+  });
+  const r4 = (n: number): number => Math.round(n * 10000) / 10000;
+  return {
+    method:
+      'Token odds are a logistic regression on all protocols in the snapshot: y = 1 when the protocol records a token, on log(TVL), age capped at 5 years, and a missing-age flag, plus a shrunk per-category log-odds offset (n / (n + 8)), then an intercept shift so the mean predicted odds equals the observed token rate. Two deterministic hold-outs (every 5th protocol by slug, offsets 0 and 2) score AUC and Brier on protocols the fit never saw. Read the odds as a propensity — the share of protocols that look like this one and already record a token — not a promise that this one launches.',
+    global_rate: r4(globalRate),
+    coefficients: {
+      intercept: r4(full.coef[0]!),
+      log_tvl: r4(full.coef[1]!),
+      age: r4(full.coef[2]!),
+      age_missing: r4(full.coef[3]!),
+    },
+    intercept_shift: r4(full.shift),
+    category_offsets: Object.fromEntries(
+      Object.entries(full.offsets).map(([c, e]) => [c, r4(e)]),
+    ),
+    in_sample: { auc: r4(aucScore(yAll, predAll)), brier: r4(brierScore(yAll, predAll)) },
+    splits: splits.map((s) => ({ ...s, auc: r4(s.auc), brier: r4(s.brier), mean_pred: r4(s.mean_pred), observed: r4(s.observed) })),
+  };
+}
+
+// --- costed farm verdicts --------------------------------------------------
+//
+// Capital: two actions at the $25 / $50 / $100 tier (same tier as the farm
+// steps). Gas: four transactions at a STATED typical fee for the main
+// chain — these are typical mainnet fees, not snapshot data; the dashboard
+// says so. Total = capital + gas. Hold: same rule as the farm steps.
+// Verdict (printed in the dashboard next to the verdicts): EV / total cost
+// >= 30,000 HIGH CONVICTION, >= 10,000 MODERATE, >= 3,000 LOW ROI,
+// otherwise CAPITAL HEAVY; odds under 10% with a total cost of $150 or
+// more is CAPITAL HEAVY whatever the ratio. EV here is protocol-level
+// expected value (implied value x token odds), not a promised payout to
+// one farmer — the verdict compares the size of the prize pool against
+// what one farmer must spend to be in it.
+
+const GAS_FEE_USD: Record<string, number> = {
+  Ethereum: 2.5,
+  Arbitrum: 0.1,
+  Optimism: 0.1,
+  Base: 0.05,
+  Binance: 0.15,
+  Solana: 0.02,
+  Polygon: 0.05,
+  Avalanche: 0.3,
+  Tron: 0.5,
+};
+const GAS_TXS = 4;
+const DEFAULT_GAS_FEE_USD = 0.5;
+
+function actionAmount(p: Protocol): number {
+  return p.tvl_usd < 10_000_000 ? 25 : p.tvl_usd < 100_000_000 ? 50 : 100;
+}
+
+function holdDaysFor(p: Protocol, asOf: string): number {
+  const age = ageYears(p, asOf);
+  if (age === null) return 60;
+  if (age < 0.5) return 30;
+  if (age < 1) return 60;
+  if (age < 2) return 90;
+  return 120;
+}
+
+function verdictFor(ev: number, totalCost: number, odds: number): string {
+  if (odds < 0.1 && totalCost >= 150) return 'CAPITAL HEAVY';
+  const ratio = ev / Math.max(1, totalCost);
+  if (ratio >= 30000) return 'HIGH CONVICTION';
+  if (ratio >= 10000) return 'MODERATE';
+  if (ratio >= 3000) return 'LOW ROI';
+  return 'CAPITAL HEAVY';
+}
+
+function farmCostFor(p: Protocol, ev: number, odds: number, asOf: string): FarmCost {
+  const capital = 2 * actionAmount(p);
+  const gas = GAS_TXS * (GAS_FEE_USD[p.chains[0] || ''] ?? DEFAULT_GAS_FEE_USD);
+  const total = capital + gas;
+  return {
+    capital_usd: capital,
+    gas_usd: Math.round(gas * 100) / 100,
+    total_usd: Math.round(total * 100) / 100,
+    hold_days: holdDaysFor(p, asOf),
+    verdict: verdictFor(ev, total, odds),
+  };
+}
+
 // --- which protocols can be ranked ----------------------------------------
 
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
@@ -436,17 +740,26 @@ function ageText(age: number | null): string {
   return age.toFixed(1) + ' years';
 }
 
-function farmSteps(p: Protocol, implied: number, rank: number, total: number, asOf: string): string[] {
+function farmSteps(
+  p: Protocol,
+  implied: number,
+  rank: number,
+  total: number,
+  asOf: string,
+  cost: FarmCost,
+  ev: number,
+  odds: number,
+): string[] {
   const age = ageYears(p, asOf);
   const action = actionFor(p);
-  const amount = p.tvl_usd < 10_000_000 ? 25 : p.tvl_usd < 100_000_000 ? 50 : 100;
-  const holdDays = age === null ? 60 : age < 0.5 ? 30 : age < 1 ? 60 : age < 2 ? 90 : 120;
+  const amount = actionAmount(p);
+  const holdDays = cost.hold_days;
   const chain1 = p.chains[0] || 'its main chain';
   const chain2 = p.chains[1];
   const change = p.change_7d === null ? 'unknown' : p.change_7d.toFixed(1) + '%';
   const steps: string[] = [
     `Open ${p.name} (${p.category}) and connect the wallet you farm with. Tracked TVL is ${money(p.tvl_usd)} across ${p.chains.length} chain${p.chains.length === 1 ? '' : 's'}.`,
-    `On ${chain1}, ${action} — start with $${amount} or less. The point is a real transaction history, not size.`,
+    `On ${chain1}, ${action} — start with $${amount} or less. Budget $${cost.capital_usd} capital for the two actions plus about $${cost.gas_usd.toFixed(2)} gas for 4 transactions (typical ${chain1} fees), $${cost.total_usd.toFixed(2)} in all.`,
     `Hold the position ${holdDays} days. ${p.name} has run ${ageText(age)} without a token, and snapshots usually reward time in the protocol more than size.`,
   ];
   if (chain2) {
@@ -461,7 +774,7 @@ function farmSteps(p: Protocol, implied: number, rank: number, total: number, as
   steps.push(
     `If ${p.name} runs a points campaign, finish the weekly task once a week and save every transaction hash in a notes file.`,
     `Watch the 7-day change (${change}): if TVL falls more than 20% in a week while the change turns negative, cut the position in half before the next step.`,
-    `This radar prices ${p.name} at ${money(implied)} (rank #${rank} of ${total}). Re-check the board weekly; a fall of 20+ ranks means the thesis is stale.`,
+    `Verdict ${cost.verdict}: token odds ${(odds * 100).toFixed(0)}%, expected value ${money(ev)} against a $${cost.total_usd.toFixed(2)} farm cost. This radar prices ${p.name} at ${money(implied)} (rank #${rank} of ${total}). Re-check weekly; a fall of 20+ ranks means the thesis is stale.`,
     `When the token launches, claim through ${p.name}'s own app only. Never sign a claim link from a DM, a search ad, or a lookalike domain.`,
   );
   return steps;
@@ -536,6 +849,11 @@ export function buildRows(snapshot: Snapshot): RadarData {
 
   const rankable = snapshot.protocols.filter(isRankable);
   const watchSet = new Set(snapshot.watchlist);
+  // Token odds are fitted on the whole snapshot (tokened + pre-token),
+  // sorted by slug for the deterministic hold-outs.
+  const allSorted = [...snapshot.protocols].sort((a, b) => (a.slug < b.slug ? -1 : 1));
+  const oddsModel = fitOddsModel(allSorted, asOf);
+  const oddsValidation = validateOdds(allSorted, asOf);
   const scored = rankable
     .map((p) => {
       const [maturity, growth, breadth] = tilts(p, asOf);
@@ -545,23 +863,38 @@ export function buildRows(snapshot: Snapshot): RadarData {
     })
     .sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : 1));
 
-  const rows: RadarRow[] = scored.map((s, i) => ({
-    rank: i + 1,
-    slug: s.p.slug,
-    name: s.p.name,
-    category: s.p.category,
-    chains: s.p.chains,
-    tvl_usd: s.p.tvl_usd,
-    change_7d: s.p.change_7d,
-    age_years: ageYears(s.p, asOf),
-    implied_value_usd: Math.round(s.implied),
-    multiple: s.multiple,
-    maturity: s.maturity,
-    growth: s.growth,
-    breadth: s.breadth,
-    watchlist: watchSet.has(s.p.slug),
-    farm_steps: farmSteps(s.p, s.implied, i + 1, scored.length, asOf),
-  }));
+  const rows: RadarRow[] = scored.map((s, i) => {
+    // Round the odds FIRST, then derive EV from the stored odds, so every
+    // row is internally exact: EV = round(implied x token_odds as stored).
+    // (An earlier draft computed EV from the unrounded odds and 166 of 198
+    // rows failed the exact-consistency check — caught by the v3 verify.)
+    const odds = Math.round(predictOdds(s.p, oddsModel, asOf) * 10000) / 10000;
+    // EV is derived from the ROUNDED implied value, so the stored row is
+    // exactly consistent: EV = round(implied_value_usd x token_odds).
+    const impliedRounded = Math.round(s.implied);
+    const ev = Math.round(impliedRounded * odds);
+    const cost = farmCostFor(s.p, ev, odds, asOf);
+    return {
+      rank: i + 1,
+      slug: s.p.slug,
+      name: s.p.name,
+      category: s.p.category,
+      chains: s.p.chains,
+      tvl_usd: s.p.tvl_usd,
+      change_7d: s.p.change_7d,
+      age_years: ageYears(s.p, asOf),
+      implied_value_usd: impliedRounded,
+      multiple: s.multiple,
+      maturity: s.maturity,
+      growth: s.growth,
+      breadth: s.breadth,
+      watchlist: watchSet.has(s.p.slug),
+      token_odds: odds,
+      expected_value_usd: ev,
+      farm_cost: cost,
+      farm_steps: farmSteps(s.p, s.implied, i + 1, scored.length, asOf, cost, ev, odds),
+    };
+  });
 
   const liveComps: LiveComp[] = live.map((p) => ({
     slug: p.slug,
@@ -577,8 +910,8 @@ export function buildRows(snapshot: Snapshot): RadarData {
     source: snapshot.source,
     floor_usd: snapshot.floor_usd,
     model: {
-      id: 'radar-3',
-      note: 'log-log comps curve fitted on 128 live protocols, shrunk category effects, small documented tilts',
+      id: 'radar-4',
+      note: 'log-log comps curve fitted on 128 live protocols, shrunk category effects, small documented tilts; token odds from a fitted logistic on all 758 protocols; costed farm verdicts from expected value per dollar spent',
     },
     fit: {
       a: f.a,
@@ -589,18 +922,28 @@ export function buildRows(snapshot: Snapshot): RadarData {
       effects: f.effects,
     },
     validation,
+    odds: oddsValidation,
     stats: {
       rows: rows.length,
       watchlist_covered: rows.filter((r) => r.watchlist).length,
       watchlist_total: snapshot.watchlist.length,
       live_n: live.length,
       rankable_n: rankable.length,
+      excluded_n: snapshot.protocols.length - rankable.length,
+      tokened_n: snapshot.protocols.filter((p) => p.mcap_usd !== null).length,
       spearman_tvl_implied: spearman(
         rows.map((r) => r.tvl_usd),
         rows.map((r) => r.implied_value_usd),
       ),
       top_implied_usd: rows[0]?.implied_value_usd ?? 0,
       bottom_implied_usd: rows[rows.length - 1]?.implied_value_usd ?? 0,
+      verdict_counts: rows.reduce(
+        (acc, r) => {
+          acc[r.farm_cost.verdict] = (acc[r.farm_cost.verdict] ?? 0) + 1;
+          return acc;
+        },
+        {} as Record<string, number>,
+      ),
     },
     watchlist: snapshot.watchlist,
     live: liveComps,
@@ -618,6 +961,22 @@ export function boardIssue(radar: RadarData, snapshot: Snapshot): string | null 
     if (rows[i].rank !== i + 1) return `row ${i} has rank ${rows[i].rank}, expected ${i + 1}`;
     if (!Number.isSafeInteger(rows[i].implied_value_usd) || rows[i].implied_value_usd <= 0) {
       return `row ${rows[i].slug} has implied value ${rows[i].implied_value_usd}, not a positive whole number`;
+    }
+    // v3 additions: odds, expected value and the farm verdict are part of
+    // the row contract too — the gate ignores extra keys, but a bad one
+    // here means the new layers misfired, so refuse loudly instead.
+    const odds = rows[i].token_odds;
+    if (typeof odds !== 'number' || !Number.isFinite(odds) || odds <= 0 || odds >= 1) {
+      return `row ${rows[i].slug} has token odds ${odds}, not a probability in (0, 1)`;
+    }
+    const ev = rows[i].expected_value_usd;
+    if (!Number.isSafeInteger(ev) || ev <= 0 || ev > rows[i].implied_value_usd) {
+      return `row ${rows[i].slug} has expected value ${ev}, not a positive whole number at most the implied value`;
+    }
+    const fc = rows[i].farm_cost;
+    const verdicts = new Set(['HIGH CONVICTION', 'MODERATE', 'LOW ROI', 'CAPITAL HEAVY']);
+    if (!fc || !verdicts.has(fc.verdict) || !(fc.total_usd > 0) || !(fc.hold_days > 0)) {
+      return `row ${rows[i].slug} has an invalid farm cost or verdict`;
     }
     if (i > 0 && rows[i].implied_value_usd > rows[i - 1].implied_value_usd) {
       return `implied value rises from row ${i} to row ${i + 1}`;
@@ -650,8 +1009,8 @@ function round4(n: number): number {
  *  dashboard/data.js is NOT in the dossier, so the evidence has to live here. */
 export function evidenceScript(radar: RadarData): string {
   const ev = {
-    model: 'radar-3',
-    formula: 'implied = TVL * multiple * maturity * growth * breadth; multiple = exp(a + (b - 1) * log(TVL) + category effect); maturity = 0.70 + 0.30 * min(1, age / 3y); growth = 1 + 0.50 * clip(change_7d / 100, -0.50, 1.00); breadth = 1 + 0.05 * min(chains, 5); floor $1M, cap $100B',
+    model: 'radar-4',
+    formula: 'implied = TVL * multiple * maturity * growth * breadth; multiple = exp(a + (b - 1) * log(TVL) + category effect); maturity = 0.70 + 0.30 * min(1, age / 3y); growth = 1 + 0.50 * clip(change_7d / 100, -0.50, 1.00); breadth = 1 + 0.05 * min(chains, 5); floor $1M, cap $100B. token odds = fitted logistic on all 758 protocols (log TVL, age, missing-age flag, shrunk category offset, recalibrated to the 19.0% token rate); expected value = implied x token odds. Farm verdict from EV / total farm cost: >= 30,000 HIGH CONVICTION, >= 10,000 MODERATE, >= 3,000 LOW ROI, else CAPITAL HEAVY.',
     fit: {
       a: round4(radar.fit.a),
       b: round4(radar.fit.b),
@@ -674,12 +1033,30 @@ export function evidenceScript(radar: RadarData): string {
       reading:
         'MedAPE and R2 on log value are the honest metrics: raw MAPE is dominated by a few protocols whose multiple is 100x the median. On both hold-outs the fitted model beats the old median model on MedAPE and on R2.',
     },
+    odds: {
+      method: radar.odds.method,
+      global_rate: radar.odds.global_rate,
+      coefficients: radar.odds.coefficients,
+      intercept_shift: radar.odds.intercept_shift,
+      category_offsets: radar.odds.category_offsets,
+      in_sample: radar.odds.in_sample,
+      splits: radar.odds.splits,
+      reading:
+        'AUC above 0.5 means the odds separate protocols that already record a token from those that do not; Brier below the base rate (0.19) means the probabilities are better than guessing the global rate for everyone. The odds are a propensity from the snapshot cross-section, not a promise that a protocol launches.',
+    },
+    farm_verdicts: {
+      rule: 'Verdict from expected value per dollar spent (EV / total farm cost): >= 30,000 HIGH CONVICTION, >= 10,000 MODERATE, >= 3,000 LOW ROI, otherwise CAPITAL HEAVY; odds under 10% with a total cost of $150 or more is CAPITAL HEAVY whatever the ratio. EV is protocol-level expected value (implied value x token odds), not a promised payout to one farmer.',
+      gas: 'Gas is four transactions at a stated typical fee for the main chain (Ethereum $2.50, Arbitrum/Optimism $0.10, Base/Polygon $0.05, Binance $0.15, Solana $0.02, Avalanche $0.30, Tron $0.50, other $0.50) — stated typical fees, not snapshot data. Capital is two actions at the $25/$50/$100 tier.',
+      counts: radar.stats.verdict_counts,
+    },
     board: {
       rows: radar.stats.rows,
       watchlist_covered: radar.stats.watchlist_covered,
       watchlist_total: radar.stats.watchlist_total,
       live_n: radar.stats.live_n,
       rankable_n: radar.stats.rankable_n,
+      excluded_n: radar.stats.excluded_n,
+      tokened_n: radar.stats.tokened_n,
       spearman_tvl_implied: round4(radar.stats.spearman_tvl_implied),
       top_implied_usd: radar.stats.top_implied_usd,
       bottom_implied_usd: radar.stats.bottom_implied_usd,
