@@ -64,7 +64,7 @@ export type RadarRow = {
   tvl_usd: number;
   change_7d: number | null;
   age_years: number | null;
-  implied_usd: number;
+  implied_value_usd: number;
   multiple: number;
   maturity: number;
   growth: number;
@@ -247,14 +247,27 @@ function categoryEffects(
 type Fitted = { a: number; b: number; effects: Record<string, number> };
 
 function fitAll(train: Protocol[]): Fitted {
+  // Degenerate live set (no live comps at all): the OLS fit is undefined
+  // (0/0), so a and the category effects would be NaN and every implied
+  // value downstream would be NaN too. Fall back to the flat 0.5 multiple
+  // (the v1 fallback) so the board stays valid instead. No-op on any
+  // snapshot that has live comps — the sealed snapshot has 128.
+  if (train.length === 0) return { a: Math.log(0.5), b: 1, effects: {} };
   const [a, b] = fitCurve(train);
   return { a, b, effects: categoryEffects(train, a, b, SHRINK_K) };
 }
 
 function fittedMultiple(p: Protocol, f: Fitted): number {
   // log(multiple) = log(mcap) - log(TVL) = a + (b - 1) * log(TVL) + effect
+  // A rankable protocol with TVL <= 0 (or a non-finite TVL) makes log(TVL)
+  // -Infinity/NaN, and 0 * Infinity is NaN — which JSON writes as null and
+  // the gate refuses. Guard to the flat 0.5 fallback multiple instead, so
+  // the row still prices at the $1M floor. No-op on the sealed snapshot:
+  // every rankable protocol there has TVL > 0.
+  if (!Number.isFinite(p.tvl_usd) || p.tvl_usd <= 0) return 0.5;
   const effect = f.effects[p.category || 'Uncategorized'] ?? 0;
-  return Math.exp(f.a + (f.b - 1) * Math.log(p.tvl_usd) + effect);
+  const m = Math.exp(f.a + (f.b - 1) * Math.log(p.tvl_usd) + effect);
+  return Number.isFinite(m) ? m : 0.5;
 }
 
 function predictV2(p: Protocol, f: Fitted, asOf: string): number {
@@ -303,6 +316,9 @@ function scoreHoldout(
   predict: (p: Protocol) => number,
   hold: Protocol[],
 ): HoldoutResult {
+  // An empty hold-out (a live set too small to split) would divide by zero;
+  // report zeros instead of NaN so the validation stays finite.
+  if (hold.length === 0) return { mape: 0, medape: 0, r2_log: 0 };
   const apes: number[] = [];
   const yt: number[] = [];
   const yp: number[] = [];
@@ -538,7 +554,7 @@ export function buildRows(snapshot: Snapshot): RadarData {
     tvl_usd: s.p.tvl_usd,
     change_7d: s.p.change_7d,
     age_years: ageYears(s.p, asOf),
-    implied_usd: Math.round(s.implied),
+    implied_value_usd: Math.round(s.implied),
     multiple: s.multiple,
     maturity: s.maturity,
     growth: s.growth,
@@ -581,10 +597,10 @@ export function buildRows(snapshot: Snapshot): RadarData {
       rankable_n: rankable.length,
       spearman_tvl_implied: spearman(
         rows.map((r) => r.tvl_usd),
-        rows.map((r) => r.implied_usd),
+        rows.map((r) => r.implied_value_usd),
       ),
-      top_implied_usd: rows[0]?.implied_usd ?? 0,
-      bottom_implied_usd: rows[rows.length - 1]?.implied_usd ?? 0,
+      top_implied_usd: rows[0]?.implied_value_usd ?? 0,
+      bottom_implied_usd: rows[rows.length - 1]?.implied_value_usd ?? 0,
     },
     watchlist: snapshot.watchlist,
     live: liveComps,
@@ -600,7 +616,10 @@ export function boardIssue(radar: RadarData, snapshot: Snapshot): string | null 
   if (rows.length > 4000) return `board has ${rows.length} rows, the gate wants 100-4000`;
   for (let i = 0; i < rows.length; i++) {
     if (rows[i].rank !== i + 1) return `row ${i} has rank ${rows[i].rank}, expected ${i + 1}`;
-    if (i > 0 && rows[i].implied_usd > rows[i - 1].implied_usd) {
+    if (!Number.isSafeInteger(rows[i].implied_value_usd) || rows[i].implied_value_usd <= 0) {
+      return `row ${rows[i].slug} has implied value ${rows[i].implied_value_usd}, not a positive whole number`;
+    }
+    if (i > 0 && rows[i].implied_value_usd > rows[i - 1].implied_value_usd) {
       return `implied value rises from row ${i} to row ${i + 1}`;
     }
     const steps = rows[i].farm_steps;
